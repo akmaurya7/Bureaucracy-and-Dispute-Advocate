@@ -8,6 +8,7 @@
 /out/
 /build
 /dist
+*.tsbuildinfo
 
 # SQLite Databases (Sensitive runtime data)
 *.db

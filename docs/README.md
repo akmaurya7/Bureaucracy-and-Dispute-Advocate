@@ -14,6 +14,7 @@ This repository maintains a strict **Step-by-Step Documentation Protocol**: ever
 | **Architecture** | [`/ARCHITECTURE.md`](../ARCHITECTURE.md) | Master technical blueprint, system mermaid diagrams, and end-to-end data flow. | System Architects |
 | **Architecture** | [`/docs/architecture/SCALABILITY_AND_MODULARITY.md`](./architecture/SCALABILITY_AND_MODULARITY.md) | Plugin interface, horizontal scaling, and decoupled service layers. | Backend Engineers |
 | **Architecture** | [`/docs/architecture/DATABASE_AND_REPO_PATTERN.md`](./architecture/DATABASE_AND_REPO_PATTERN.md) | Relational ERD and the `CaseRepository` abstraction pattern. | Database Engineers |
+| **API Reference** | [`/docs/api/OCR_AND_INGESTION_API.md`](./api/OCR_AND_INGESTION_API.md) | Ingestion endpoint (`/api/documents/upload`), schemas, and error responses. | API Consumers |
 | **Standards** | [`/docs/standards/DOCUMENTATION_PROTOCOL.md`](./standards/DOCUMENTATION_PROTOCOL.md) | Codified standard requiring step documentation before and after work. | All Contributors |
 | **Design System** | [`/docs/ui/DESIGN_SYSTEM_CLEAR_AND_LIGHT.md`](./ui/DESIGN_SYSTEM_CLEAR_AND_LIGHT.md) | Clear, light, calm aesthetic guidelines, color tokens, and WCAG AAA rules. | Frontend Engineers, Designers |
 | **Compliance** | [`/docs/compliance/ZERO_PII_RETENTION_AUDIT.md`](./compliance/ZERO_PII_RETENTION_AUDIT.md) | HIPAA, GLBA, and FCRA client-side PII sanitization and zero-leak guarantees. | QA & Legal Auditors |
@@ -27,6 +28,7 @@ Detailed chronological logs of all completed engineering steps, including object
 
 - **Step 00:** [`/docs/steps/STEP_00_PREREQUISITES_SETUP.md`](./steps/STEP_00_PREREQUISITES_SETUP.md) — Foundation prerequisites, design tokens, and documentation standards.
 - **Step 01:** [`/docs/steps/STEP_01_CORE_FOUNDATION.md`](./steps/STEP_01_CORE_FOUNDATION.md) — Next.js 15 app scaffold, Prisma SQLite synchronization, CaseRepository implementation, zero-retention client redactor, and clean build verification.
+- **Step 02:** [`/docs/steps/STEP_02_DOCUMENT_INGESTION_OCR.md`](./steps/STEP_02_DOCUMENT_INGESTION_OCR.md) — Multi-agent OCR document ingestion pipeline, Zod normalization schemas, client-side PII masking dropzone, split-screen studio integration, and 100% test accuracy audit.
 
 ---
 
