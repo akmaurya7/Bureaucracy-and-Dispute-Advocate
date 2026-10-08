@@ -30,32 +30,28 @@
   5. **Split-Screen Studio Integration (`src/app/studio/page.tsx`):** Dynamic synchronization between ingested documents and live dispute letter editor.
   6. **Automated Audit Suite (`tests/verifyOcrPipeline.ts`):** 21 compliance and assertion checks achieving 100.0% extraction accuracy and zero PII leakage.
 * **Exit Gate:** 100.0% accuracy on sample medical bills and debt collection letters, clean Next.js production build (`npm run build`).
-* **Documentation Reference:** `docs/steps/STEP_02_DOCUMENT_INGESTION_OCR.md`.
+* **Documentation Reference:** `docs/steps/STEP_02_DOCUMENT_INGESTION_OCR.md`, `docs/api/OCR_AND_INGESTION_API.md`.
 
 ---
 
-## Phase 3: Statutory Rules & Legal Dispute Engine [UPCOMING]
+## Phase 3: Statutory Rules & Legal Dispute Engine [COMPLETED]
 * **Objective:** Map real-world consumer grievances and overcharges to codified federal statutes to generate binding dispute demands.
-* **Lead Specialists:** Harvey (Legal Lead) & Justitia (Compliance Auditor)
+* **Lead Specialists:** Harvey (Legal Lead), Lex (Backend Lead), Justitia (Compliance Auditor)
 * **Key Deliverables:**
-  1. **FDCPA Debt Collection Module (15 U.S.C. § 1692g & CFPB Reg F):**
-     - Generates 30-day formal debt validation demand.
-     - Requires chain-of-title, original agreement, itemized accounting since default.
-     - Explicit phone cease-and-desist under § 1692c.
-  2. **No Surprises Act Medical Auditor (42 U.S.C. § 300gg-111 & CMS IDR):**
-     - CPT code unbundling and upcoding anomaly detection.
-     - In-network facility vs out-of-network clinician balance bill check.
-     - Generates Open Negotiation Notice and Itemized Bill Demand.
-  3. **FCRA Credit Bureau Reinvestigation (15 U.S.C. § 1681i):**
-     - Specific tradeline inaccuracy challenge.
-     - Demand for Method of Verification (MOV) under § 611(a)(7).
-  4. **FTC Click-to-Cancel & EFTA (16 CFR Part 425 & 15 U.S.C. § 1693e):**
-     - Cancellation symmetry notice and formal payment authorization revocation.
-* **Exit Gate:** Automated generation of customized, legally codified dispute letters for all 4 primary domains.
+  1. **Dispute Types & Directives (`src/lib/disputes/types.ts`):** Defined statutory interfaces, directive options (`ceasePhoneCalls`, `demandItemizedLedger`, `citeStatutoryDamages`, `includeRegulatoryEscalation`, `disputeGrounds`), and compiled letter outputs.
+  2. **FDCPA Debt Collection Module (`src/lib/disputes/fdcpa.ts`):** 15 U.S.C. § 1692g(b) debt validation demand, chain-of-title proof, accounting from $0, § 1692c(c) phone cease-and-desist, 30 calendar days SLA.
+  3. **No Surprises Act Medical Auditor (`src/lib/disputes/noSurprises.ts`):** 42 U.S.C. § 300gg-111 & 45 CFR Part 149 Open Negotiation Notice, QPA ledger demand, CPT 99285 upcoding/99070 unbundling challenge, 30 business days SLA.
+  4. **FCRA Credit Bureau Reinvestigation Module (`src/lib/disputes/fcra.ts`):** 15 U.S.C. § 1681i formal 30-day reinvestigation demand, § 611(a)(7) Method of Verification (MOV) demand, furnisher liability under § 1681s-2.
+  5. **FTC Click-to-Cancel & EFTA Module (`src/lib/disputes/ftcClickToCancel.ts`):** 16 CFR Part 425 Negative Option Rule cancellation symmetry notice, 15 U.S.C. § 1693e preauthorized debit revocation, 10 business days SLA.
+  6. **Master Dispute Router & Compiler (`src/lib/disputes/engine.ts`):** Master dispute compiler routing `ParsedDocumentData` and directives into formal certified mail demand letters.
+  7. **Generation REST API (`src/app/api/disputes/generate/route.ts`):** POST endpoint persisting dispute letters into SQLite via `CaseRepository.createDisputeLetter` and advancing case status to `LETTER_GENERATED`.
+  8. **Comprehensive Verification Suite (`tests/verifyDisputeEngine.ts` & `tests/verifyDisputeEngine.js`):** 60 automated statutory checks verifying citations, deadlines, zero PII retention, and database persistence with 100% pass rate.
+* **Exit Gate:** 100% accuracy on all 4 statutory domains, verified database persistence, clean Next.js production build (`npm run build`).
+* **Documentation Reference:** `docs/steps/STEP_03_STATUTORY_RULES_ENGINE.md`, `docs/api/DISPUTE_GENERATION_API.md`.
 
 ---
 
-## Phase 4: Split-Screen Dispute Studio & PDF Export
+## Phase 4: Split-Screen Dispute Studio & PDF Export [UPCOMING]
 * **Objective:** Deliver a seamless user experience where consumers can inspect their bill side-by-side with the generated legal demand.
 * **Lead Specialists:** Mercury (Frontend Lead) & Lex (Backend)
 * **Key Deliverables:**

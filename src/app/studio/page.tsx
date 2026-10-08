@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   FileText,
   ShieldCheck,
@@ -21,23 +21,66 @@ import {
   Clock,
   CheckCircle2,
   ExternalLink,
+  Sliders,
+  Database,
+  Calendar,
+  Building,
 } from 'lucide-react';
 import DocumentDropzone, { SAMPLE_DOCUMENTS } from '@/components/DocumentDropzone';
+import StatutoryClauseToggles, {
+  StatutoryDirectives,
+  DisputeDomainId,
+  STATUTORY_DOMAINS,
+} from '@/components/StatutoryClauseToggles';
 import { redactSensitivePII } from '@/lib/ocr/redactor';
 import {
   ParsedDocumentData,
   ItemizedCharge,
   DisputeCategory,
 } from '@/lib/ocr/schemas';
-import { STATUTORY_RULES } from '@/lib/statutes/rules';
+import { compileDisputeLetter } from '@/lib/disputes/engine';
+import type { CompiledDisputeLetter } from '@/lib/disputes/types';
+
+// Helper to convert category to domain ID
+function categoryToDomainId(category: DisputeCategory): DisputeDomainId {
+  switch (category) {
+    case 'DEBT_COLLECTION':
+      return 'FDCPA_1692G';
+    case 'CREDIT_REPORT_ERROR':
+      return 'FCRA_1681I';
+    case 'SUBSCRIPTION_CANCEL':
+      return 'FTC_CLICK_TO_CANCEL';
+    case 'MEDICAL_BILLING':
+    default:
+      return 'NO_SURPRISES_ACT';
+  }
+}
+
+// Helper to convert domain ID to category
+function domainIdToCategory(domainId: DisputeDomainId): DisputeCategory {
+  switch (domainId) {
+    case 'FDCPA_1692G':
+      return 'DEBT_COLLECTION';
+    case 'FCRA_1681I':
+      return 'CREDIT_REPORT_ERROR';
+    case 'FTC_CLICK_TO_CANCEL':
+      return 'SUBSCRIPTION_CANCEL';
+    case 'NO_SURPRISES_ACT':
+    default:
+      return 'MEDICAL_BILLING';
+  }
+}
 
 export default function DisputeStudioPage() {
   // Initial demo document data parsed from default Memorial Hospital bill
   const defaultSample = SAMPLE_DOCUMENTS[0];
   const initialRedaction = redactSensitivePII(defaultSample.rawText);
 
+  // Panels visibility state
+  const [showDropzone, setShowDropzone] = useState(false);
+  const [showDirectivesPanel, setShowDirectivesPanel] = useState(true);
+
   // Studio Ingestion & Document State
-  const [showDropzone, setShowDropzone] = useState(true);
   const [rawSourceText, setRawSourceText] = useState(defaultSample.rawText);
   const [isPIIRedacted, setIsPIIRedacted] = useState(true);
   const [activeLeftView, setActiveLeftView] = useState<'itemized' | 'raw'>('itemized');
@@ -77,7 +120,8 @@ export default function DisputeStudioPage() {
           isDisputed: true,
           isFlagged: true,
           violationType: 'UPCODING',
-          violationExplanation: 'Inappropriate Level 5 code assignment without documentation of high-complexity medical decision-making.',
+          violationExplanation:
+            'Inappropriate Level 5 code assignment without documentation of high-complexity medical decision-making.',
           statutoryBasis: '42 U.S.C. § 300gg-111 / No Surprises Act',
         },
         {
@@ -90,7 +134,8 @@ export default function DisputeStudioPage() {
           isDisputed: true,
           isFlagged: true,
           violationType: 'UNBUNDLING',
-          violationExplanation: 'Impermissible unbundling of surgical tray supplies into separate billing line items.',
+          violationExplanation:
+            'Impermissible unbundling of routine surgical tray supplies into separate billing line items.',
           statutoryBasis: 'CPT Global Surgical Package Rules',
         },
         {
@@ -115,7 +160,8 @@ export default function DisputeStudioPage() {
           isDisputed: true,
           isFlagged: true,
           violationType: 'SURPRISE_BILL',
-          violationExplanation: 'Clear violation of the federal No Surprises Act prohibiting balance billing for emergency care at in-network facility.',
+          violationExplanation:
+            'Clear violation of the federal No Surprises Act prohibiting balance billing for emergency care at in-network facility.',
           statutoryBasis: '42 U.S.C. § 300gg-111; 45 CFR § 149.410',
         },
       ],
@@ -143,18 +189,22 @@ export default function DisputeStudioPage() {
     totalFlaggedAmount: 4330.0,
   });
 
+  // Active Statutory Dispute Engine & Directives State
+  const [selectedDomain, setSelectedDomain] = useState<DisputeDomainId>('NO_SURPRISES_ACT');
+  const [directives, setDirectives] = useState<StatutoryDirectives>({
+    ceasePhoneCalls: true,
+    demandItemizedLedger: true,
+    requestChainOfTitle: false,
+    includeMethodOfVerification: false,
+    includeRegulatoryEscalation: true,
+  });
+
   // Disputed item selection IDs
   const [selectedChargeIds, setSelectedChargeIds] = useState<string[]>([
     'charge-1',
     'charge-2',
     'charge-4',
   ]);
-
-  // Clause Toggles
-  const [includeCeasePhone, setIncludeCeasePhone] = useState(true);
-  const [includeAccountingLedger, setIncludeAccountingLedger] = useState(true);
-  const [includeRegulatoryEscalation, setIncludeRegulatoryEscalation] = useState(true);
-  const [includeDebtValidationNotice, setIncludeDebtValidationNotice] = useState(true);
 
   // Active highlighted line item ID (for bidirectional synchronization)
   const [highlightedChargeId, setHighlightedChargeId] = useState<string | null>(null);
@@ -165,154 +215,101 @@ export default function DisputeStudioPage() {
   const [copied, setCopied] = useState(false);
   const [pdfGenerating, setPdfGenerating] = useState(false);
 
-  // Find relevant statute rule based on detected document category
-  const relevantStatute = useMemo(() => {
-    const category = parsedDoc.detectedCategory;
-    if (category === 'DEBT_COLLECTION') {
-      return STATUTORY_RULES.find((r) => r.id === 'FDCPA_1692G') || STATUTORY_RULES[0];
-    } else if (category === 'CREDIT_REPORT_ERROR') {
-      return STATUTORY_RULES.find((r) => r.id === 'FCRA_1681I') || STATUTORY_RULES[1];
-    } else if (category === 'SUBSCRIPTION_CANCEL') {
-      return STATUTORY_RULES.find((r) => r.id === 'FTC_CLICK_TO_CANCEL') || STATUTORY_RULES[3];
-    }
-    // Default to Medical Billing / No Surprises Act
-    return STATUTORY_RULES.find((r) => r.id === 'NO_SURPRISES_ACT') || STATUTORY_RULES[2];
-  }, [parsedDoc.detectedCategory]);
+  // Database Persistence State
+  const [savedCaseId, setSavedCaseId] = useState<string | null>(null);
+  const [isSavingToDb, setIsSavingToDb] = useState(false);
+  const [dbSaveNotice, setDbSaveNotice] = useState<string | null>(null);
 
-  // Compute live auto-generated dispute letter draft
-  const generatedDraft = useMemo(() => {
-    const creditorName = parsedDoc.senderOrCreditor.name || 'Claims & Patient Financial Services';
-    const creditorAddress = parsedDoc.senderOrCreditor.address || 'Corporate Compliance Office';
-    const accountRef = isPIIRedacted
-      ? parsedDoc.senderOrCreditor.accountOrReferenceNumber
-        ? `[REDACTED-ACCT-***${parsedDoc.senderOrCreditor.accountOrReferenceNumber.slice(-4)}]`
-        : '[REDACTED-ACCOUNT-REF]'
-      : parsedDoc.senderOrCreditor.accountOrReferenceNumber || '847291048';
-
-    const charges = parsedDoc.debtOrBillDetails.itemizedCharges || [];
-    const activeDisputedCharges = charges.filter((c) => (c.id ? selectedChargeIds.includes(c.id) : c.isDisputed));
-
-    const totalDisputedAmount = activeDisputedCharges.reduce(
-      (sum, item) => sum + (item.amount || item.billedAmount || 0),
-      0
-    );
-
-    const currentDate = new Date().toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
+  // Compile formal statutory dispute letter in real time
+  const compiledLetter: CompiledDisputeLetter = useMemo(() => {
+    return compileDisputeLetter({
+      parsedDoc,
+      categoryOverride: domainIdToCategory(selectedDomain),
+      directives: {
+        ceasePhoneCalls: directives.ceasePhoneCalls,
+        demandItemizedLedger: directives.demandItemizedLedger,
+        requestChainOfTitle: directives.requestChainOfTitle,
+        includeMethodOfVerification: directives.includeMethodOfVerification,
+        includeRegulatoryEscalation: directives.includeRegulatoryEscalation,
+        citeStatutoryDamages: true,
+        selectedChargeIds,
+      },
     });
+  }, [parsedDoc, selectedDomain, directives, selectedChargeIds]);
 
-    const statutorySlaDays = relevantStatute?.statutoryResponseDays || 30;
-
-    let itemizedViolationsBlock = '';
-    if (activeDisputedCharges.length > 0) {
-      itemizedViolationsBlock =
-        '### Itemized Discrepancies & Statutory Violations:\n' +
-        activeDisputedCharges
-          .map((item, idx) => {
-            const codePrefix = item.code ? `[${item.code}] ` : '';
-            const amountStr = `$${(item.amount || item.billedAmount || 0).toLocaleString('en-US', {
-              minimumFractionDigits: 2,
-            })}`;
-            const explanation =
-              item.violationExplanation || item.flagReason || 'Unverified billing charge requiring formal substantiation.';
-            const basis = item.statutoryBasis || item.statuteRef ? ` (Statutory Basis: ${item.statutoryBasis || item.statuteRef})` : '';
-            return `${idx + 1}. **${codePrefix}${item.description}** (${amountStr})\n   - *Dispute Ground:* ${explanation}${basis}`;
-          })
-          .join('\n\n') +
-        '\n\n';
-    }
-
-    const recipientDepartment = parsedDoc.senderOrCreditor.department || 'Billing & Legal Compliance Department';
-
-    return `DATE: ${currentDate}
-SENT VIA: Certified Mail with Return Receipt Requested / Formal Regulatory Compliance Portal
-
-FROM:
-Consumer Advocate on behalf of Account Holder
-123 Consumer Protection Way
-Austin, TX 78701
-
-TO:
-${creditorName}
-${recipientDepartment}
-${creditorAddress}
-
-RE: FORMAL STATUTORY NOTICE OF DISPUTE & DEMAND FOR CORRECTION
-Account / Reference ID: ${accountRef}
-Total Disputed Amount: $${totalDisputedAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-Applicable Governing Law: ${relevantStatute.code} (${relevantStatute.name})
-
-Dear Compliance Officers and Claims Representatives,
-
-Please take formal notice that the consumer disputes in whole the claimed balance, assessments, and derogatory billing line items associated with Account/Reference Number ${accountRef}.
-
-### Statement of Dispute:
-A thorough line-by-line audit of your statement dated ${parsedDoc.debtOrBillDetails.statementDate || 'recently'} reveals improper billing practices, unverified fees, and statutory deficiencies under federal and state consumer protection standards.
-
-${itemizedViolationsBlock}### Statutory Authority & Mandatory Protections:
-${relevantStatute.mandatoryLanguageSnippet}
-
-${
-  includeAccountingLedger
-    ? `### Mandatory Demand for Itemized Accounting Records:
-Pursuant to federal billing disclosure standards and statutory auditing rules, you are hereby requested to furnish a comprehensive, line-by-line itemized ledger displaying the CMS relative value units (RVU), in-network contracted rates, procedural coding documentation, and full proof of lawful assignment.`
-    : ''
-}
-
-${
-  includeCeasePhone
-    ? `### Binding Communication Directive:
-Pursuant to statutory consumer protection principles, all future communications regarding this matter must be conducted strictly in writing. Immediately cease and desist all telephone contact, automated dialing, and text messaging to personal and workplace telephone numbers.`
-    : ''
-}
-
-${
-  includeDebtValidationNotice && parsedDoc.detectedCategory === 'DEBT_COLLECTION'
-    ? `### FDCPA Debt Validation Directive (15 U.S.C. § 1692g):
-Because your notice lacked proper statutory disclosures, this letter serves as a timely dispute within the statutory window. You must immediately halt all collection attempts until written verification signed by the original creditor is provided.`
-    : ''
-}
-
-### Mandatory Corrective Actions Required within ${statutorySlaDays} Calendar Days:
-1. Immediately retract the flagged unbundled, upcoded, or out-of-network balance bill charges totaling $${totalDisputedAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}.
-2. Provide a certified zero-balance receipt or an amended statement conforming strictly to lawful cost-sharing.
-3. Confirm in writing that this account is placed on formal administrative dispute hold and has not been referred to external credit bureaus or collection agencies.
-
-${
-  includeRegulatoryEscalation
-    ? `Failure to provide written compliance within ${statutorySlaDays} calendar days will result in immediate formal complaints lodged with the Consumer Financial Protection Bureau (CFPB), the Centers for Medicare & Medicaid Services (CMS No Surprises Help Desk), and the Office of the Attorney General.`
-    : ''
-}
-
-Sincerely,
-
-__________________________________________________
-Authorized Consumer Representative & Advocate
-`;
-  }, [
-    parsedDoc,
-    isPIIRedacted,
-    selectedChargeIds,
-    relevantStatute,
-    includeCeasePhone,
-    includeAccountingLedger,
-    includeRegulatoryEscalation,
-    includeDebtValidationNotice,
-  ]);
-
-  // Keep live textarea synchronized unless user has customized it
+  // Sync draft state with compiled letter unless user customized it
   useEffect(() => {
     if (!isDraftManuallyEdited) {
-      setCustomLetterDraft(generatedDraft);
+      setCustomLetterDraft(compiledLetter.fullLetterMarkdown);
     }
-  }, [generatedDraft, isDraftManuallyEdited]);
+  }, [compiledLetter.fullLetterMarkdown, isDraftManuallyEdited]);
+
+  // Asynchronous background persistence to SQLite via /api/disputes/generate
+  const dbSyncTimerRef = useRef<NodeJS.Timeout | null>(null);
+  useEffect(() => {
+    if (dbSyncTimerRef.current) {
+      clearTimeout(dbSyncTimerRef.current);
+    }
+
+    dbSyncTimerRef.current = setTimeout(async () => {
+      try {
+        setIsSavingToDb(true);
+        const res = await fetch('/api/disputes/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            caseId: savedCaseId || undefined,
+            parsedDoc,
+            categoryOverride: domainIdToCategory(selectedDomain),
+            directives: {
+              ceasePhoneCalls: directives.ceasePhoneCalls,
+              demandItemizedLedger: directives.demandItemizedLedger,
+              requestChainOfTitle: directives.requestChainOfTitle,
+              includeMethodOfVerification: directives.includeMethodOfVerification,
+              includeRegulatoryEscalation: directives.includeRegulatoryEscalation,
+              citeStatutoryDamages: true,
+              selectedChargeIds,
+            },
+            saveToDatabase: true,
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.caseId) {
+            setSavedCaseId(data.caseId);
+          }
+          setDbSaveNotice('Synced to SQLite');
+          setTimeout(() => setDbSaveNotice(null), 3000);
+        }
+      } catch (err) {
+        console.warn('Background SQLite autosave skipped:', err);
+      } finally {
+        setIsSavingToDb(false);
+      }
+    }, 1200);
+
+    return () => {
+      if (dbSyncTimerRef.current) {
+        clearTimeout(dbSyncTimerRef.current);
+      }
+    };
+  }, [parsedDoc, selectedDomain, directives, selectedChargeIds, savedCaseId]);
 
   // Handle document parsed from DocumentDropzone
   const handleDocumentParsed = useCallback((extracted: ParsedDocumentData, rawText: string) => {
     setParsedDoc(extracted);
     setRawSourceText(rawText);
+
+    // Auto-switch domain to match ingested document category
+    const autoDomain = categoryToDomainId(extracted.detectedCategory);
+    setSelectedDomain(autoDomain);
+
+    // Apply domain-specific directive presets
+    const domainMeta = STATUTORY_DOMAINS.find((d) => d.id === autoDomain);
+    if (domainMeta) {
+      setDirectives(domainMeta.defaultDirectives);
+    }
 
     // Auto-select all flagged charges
     const charges = extracted.debtOrBillDetails.itemizedCharges || [];
@@ -321,21 +318,37 @@ Authorized Consumer Representative & Advocate
 
     setIsDraftManuallyEdited(false);
     setActiveLeftView('itemized');
+    setSavedCaseId(null);
   }, []);
+
+  const handleDomainChange = (domain: DisputeDomainId) => {
+    setSelectedDomain(domain);
+    setIsDraftManuallyEdited(false);
+  };
+
+  const handleDirectiveChange = (key: keyof StatutoryDirectives, value: boolean) => {
+    setDirectives((prev) => ({ ...prev, [key]: value }));
+    setIsDraftManuallyEdited(false);
+  };
+
+  const handleApplyDirectivesPreset = (newDirectives: StatutoryDirectives) => {
+    setDirectives(newDirectives);
+    setIsDraftManuallyEdited(false);
+  };
 
   const handleToggleCharge = (chargeId: string) => {
     setSelectedChargeIds((prev) =>
       prev.includes(chargeId) ? prev.filter((id) => id !== chargeId) : [...prev, chargeId]
     );
+    setIsDraftManuallyEdited(false);
   };
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(customLetterDraft || generatedDraft);
+      await navigator.clipboard.writeText(customLetterDraft || compiledLetter.fullLetterMarkdown);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -343,7 +356,6 @@ Authorized Consumer Representative & Advocate
 
   const handleExportPDF = () => {
     setPdfGenerating(true);
-    // Create clean printable view and invoke window.print()
     setTimeout(() => {
       setPdfGenerating(false);
       const printWindow = window.open('', '_blank');
@@ -373,7 +385,7 @@ Authorized Consumer Representative & Advocate
               </style>
             </head>
             <body>
-              <pre>${customLetterDraft || generatedDraft}</pre>
+              <pre>${customLetterDraft || compiledLetter.fullLetterMarkdown}</pre>
             </body>
           </html>
         `);
@@ -385,7 +397,17 @@ Authorized Consumer Representative & Advocate
   };
 
   const currentCharges = parsedDoc.debtOrBillDetails.itemizedCharges || [];
-  const displayedSourceText = isPIIRedacted ? parsedDoc.redactedText || initialRedaction.redactedText : rawSourceText;
+  const activeDisputedCharges = currentCharges.filter((c) =>
+    c.id ? selectedChargeIds.includes(c.id) : c.isDisputed
+  );
+  const activeDisputedChargesTotal = activeDisputedCharges.reduce(
+    (sum, item) => sum + (item.amount || item.billedAmount || 0),
+    0
+  );
+
+  const displayedSourceText = isPIIRedacted
+    ? parsedDoc.redactedText || initialRedaction.redactedText
+    : rawSourceText;
 
   return (
     <div className="space-y-6">
@@ -394,21 +416,46 @@ Authorized Consumer Representative & Advocate
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-2.5">
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900">Split-Screen Dispute Studio</h1>
+              <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+                Split-Screen Dispute Studio
+              </h1>
               <span className="bg-sky-50 text-sky-800 border border-sky-200 text-xs font-semibold px-2.5 py-0.5 rounded-full">
-                {parsedDoc.detectedCategory.replace(/_/g, ' ')}
+                {compiledLetter.disputeDomain.replace(/_/g, ' ')}
               </span>
               <span className="bg-slate-100 text-slate-700 border border-slate-200 text-xs font-mono px-2 py-0.5 rounded-full">
                 Ref #{parsedDoc.senderOrCreditor.accountOrReferenceNumber || '847291048'}
               </span>
+              {dbSaveNotice && (
+                <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <Database className="w-3 h-3" /> {dbSaveNotice}
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-600">
-              Annotated source document (Left) synchronized with live statutory demand letter (Right). Drop any bill or notice to audit in real time.
+              Annotated source document (Left) synchronized with live statutory demand letter (Right).
+              Switch engines or toggle directives to adjust statutory demands in real time.
             </p>
           </div>
 
           {/* Action Toolbar */}
           <div className="flex flex-wrap items-center gap-2.5">
+            {/* Directives & Engine Panel Toggle */}
+            <button
+              type="button"
+              onClick={() => setShowDirectivesPanel(!showDirectivesPanel)}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 ${
+                showDirectivesPanel
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+              }`}
+              aria-expanded={showDirectivesPanel}
+              aria-label="Toggle statutory clauses control panel"
+            >
+              <Sliders className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>{showDirectivesPanel ? 'Hide Engine Controls' : 'Statutory Directives & Engine'}</span>
+              {showDirectivesPanel ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+
             {/* Dropzone Toggle Button */}
             <button
               type="button"
@@ -418,7 +465,7 @@ Authorized Consumer Representative & Advocate
               aria-label={showDropzone ? 'Collapse upload dropzone' : 'Expand upload dropzone'}
             >
               <FileCheck className="w-3.5 h-3.5 text-slate-600" aria-hidden="true" />
-              <span>{showDropzone ? 'Hide Dropzone' : 'Upload / Switch Document'}</span>
+              <span>{showDropzone ? 'Hide Upload' : 'Upload / Switch Doc'}</span>
               {showDropzone ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
             </button>
 
@@ -440,7 +487,7 @@ Authorized Consumer Representative & Advocate
               ) : (
                 <Lock className="w-3.5 h-3.5 text-slate-500" aria-hidden="true" />
               )}
-              <span>{isPIIRedacted ? 'PII Masking ON (Safe)' : 'PII Masking OFF'}</span>
+              <span>{isPIIRedacted ? 'PII Masking ON' : 'PII Masking OFF'}</span>
             </button>
 
             {/* Copy Draft Button */}
@@ -455,7 +502,7 @@ Authorized Consumer Representative & Advocate
               ) : (
                 <Copy className="w-3.5 h-3.5 text-slate-600" aria-hidden="true" />
               )}
-              <span>{copied ? 'Copied Draft' : 'Copy Letter'}</span>
+              <span>{copied ? 'Copied' : 'Copy'}</span>
             </button>
 
             {/* 1-Click PDF Export Button */}
@@ -481,6 +528,21 @@ Authorized Consumer Representative & Advocate
       {showDropzone && (
         <div className="transition-all duration-300">
           <DocumentDropzone onDocumentParsed={handleDocumentParsed} />
+        </div>
+      )}
+
+      {/* Collapsible Statutory Clause Toggles & Engine Switcher */}
+      {showDirectivesPanel && (
+        <div className="transition-all duration-300">
+          <StatutoryClauseToggles
+            selectedDomain={selectedDomain}
+            onDomainChange={handleDomainChange}
+            directives={directives}
+            onDirectiveChange={handleDirectiveChange}
+            onApplyPreset={handleApplyDirectivesPreset}
+            disputedChargesCount={selectedChargeIds.length}
+            totalDisputedAmount={activeDisputedChargesTotal}
+          />
         </div>
       )}
 
@@ -536,7 +598,7 @@ Authorized Consumer Representative & Advocate
                   }`}
                   aria-pressed={activeLeftView === 'raw'}
                 >
-                  Raw Redacted Stream
+                  Raw Stream
                 </button>
               </div>
             </div>
@@ -571,9 +633,9 @@ Authorized Consumer Representative & Advocate
                     </span>
                   </div>
                   <div>
-                    <span className="text-[10px] uppercase text-slate-500 font-semibold block">Audit SLA</span>
+                    <span className="text-[10px] uppercase text-slate-500 font-semibold block">Statutory Window</span>
                     <span className="font-semibold text-slate-800 block">
-                      {relevantStatute.statutoryResponseDays} Calendar Days
+                      {compiledLetter.statutorySlaDays} {compiledLetter.governingStatute.timeUnit === 'business_days' ? 'Bus. Days' : 'Cal. Days'}
                     </span>
                   </div>
                 </div>
@@ -614,7 +676,7 @@ Authorized Consumer Representative & Advocate
                               id={`charge-${item.id || index}`}
                               checked={isSelected}
                               onChange={() => item.id && handleToggleCharge(item.id)}
-                              className="mt-1 h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+                              className="mt-1 h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900 cursor-pointer"
                               aria-label={`Include ${item.description} in dispute letter`}
                             />
                             <div>
@@ -698,13 +760,15 @@ Authorized Consumer Representative & Advocate
               </div>
             )}
 
-            {/* Statutory Legal Protection Footer Badge */}
-            <div className="pt-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
+            {/* Governing Law Footer Badge */}
+            <div className="pt-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
               <span className="flex items-center gap-1.5">
                 <Scale className="w-3.5 h-3.5 text-slate-700" aria-hidden="true" />
-                <span>Statute: {relevantStatute.name}</span>
+                <span className="font-semibold text-slate-800">{compiledLetter.governingStatute.name}</span>
               </span>
-              <span className="font-mono text-[11px] text-slate-600">{relevantStatute.code}</span>
+              <span className="font-mono text-[11px] text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">
+                {compiledLetter.governingStatute.code}
+              </span>
             </div>
           </div>
         </section>
@@ -715,24 +779,26 @@ Authorized Consumer Representative & Advocate
           className="bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden"
         >
           {/* Right Pane Top Bar */}
-          <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex items-center justify-between">
+          <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center space-x-2">
               <Scale className="w-4 h-4 text-slate-800" aria-hidden="true" />
-              <h2 className="text-xs font-bold text-slate-900">Formal Legal Demand Letter (Live Editor)</h2>
+              <h2 className="text-xs font-bold text-slate-900">
+                Formal Legal Demand Letter (Live Editor)
+              </h2>
             </div>
             <div className="flex items-center space-x-2">
-              <span className="text-xs font-mono bg-white border border-slate-200 px-2 py-0.5 rounded text-slate-700 font-semibold flex items-center gap-1">
-                <Clock className="w-3 h-3 text-slate-500" aria-hidden="true" />
-                Statutory SLA: {relevantStatute.statutoryResponseDays} Days
+              <span className="text-xs font-mono bg-white border border-amber-200 px-2 py-0.5 rounded text-amber-900 font-semibold flex items-center gap-1">
+                <Clock className="w-3 h-3 text-amber-600" aria-hidden="true" />
+                Deadline: {compiledLetter.statutoryDeadlineDate}
               </span>
               {isDraftManuallyEdited && (
                 <button
                   type="button"
                   onClick={() => {
                     setIsDraftManuallyEdited(false);
-                    setCustomLetterDraft(generatedDraft);
+                    setCustomLetterDraft(compiledLetter.fullLetterMarkdown);
                   }}
-                  className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 underline underline-offset-2"
+                  className="text-xs text-slate-600 hover:text-slate-900 flex items-center gap-1 underline underline-offset-2"
                   aria-label="Reset draft to auto-synchronized state"
                 >
                   <RotateCcw className="w-3 h-3" /> Reset Auto-Draft
@@ -741,61 +807,70 @@ Authorized Consumer Representative & Advocate
             </div>
           </div>
 
-          {/* Clause Toggles Bar */}
-          <div className="bg-slate-50/60 border-b border-slate-200 px-4 py-2.5 flex flex-wrap items-center gap-4 text-xs text-slate-700">
-            <span className="font-bold text-slate-600">Clause Directives:</span>
+          {/* Legal Citations & Statutory Grounds Bar */}
+          <div className="bg-slate-50/70 border-b border-slate-200 px-4 py-2.5 flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="font-bold text-slate-700 mr-1 text-[11px] uppercase tracking-wide">
+              Codified Citations:
+            </span>
+            {compiledLetter.legalCitations.map((citation, idx) => (
+              <span
+                key={idx}
+                className="bg-white border border-slate-200 text-slate-800 text-[10px] font-mono px-2 py-0.5 rounded shadow-2xs font-medium"
+                title={citation}
+              >
+                {citation.split('(')[0].trim()}
+              </span>
+            ))}
+          </div>
 
-            <label className="flex items-center space-x-1.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={includeCeasePhone}
-                onChange={(e) => {
-                  setIncludeCeasePhone(e.target.checked);
-                  setIsDraftManuallyEdited(false);
-                }}
-                className="rounded border-slate-300 text-slate-900 focus:ring-slate-900"
-              />
-              <span>Cease Phone Calls (Writing-Only)</span>
-            </label>
+          {/* Active Directives Status Strip */}
+          <div className="bg-white border-b border-slate-100 px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-slate-700">Active Directives:</span>
+              {directives.ceasePhoneCalls && (
+                <span className="bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded font-medium">
+                  Writing-Only
+                </span>
+              )}
+              {directives.demandItemizedLedger && (
+                <span className="bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded font-medium">
+                  Itemized Ledger
+                </span>
+              )}
+              {directives.requestChainOfTitle && (
+                <span className="bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded font-medium">
+                  Chain-of-Title
+                </span>
+              )}
+              {directives.includeMethodOfVerification && (
+                <span className="bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded font-medium">
+                  MOV Demand
+                </span>
+              )}
+              {directives.includeRegulatoryEscalation && (
+                <span className="bg-rose-50 text-rose-800 border border-rose-200 px-1.5 py-0.5 rounded font-medium">
+                  Escalation Warning
+                </span>
+              )}
+            </div>
 
-            <label className="flex items-center space-x-1.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={includeAccountingLedger}
-                onChange={(e) => {
-                  setIncludeAccountingLedger(e.target.checked);
-                  setIsDraftManuallyEdited(false);
-                }}
-                className="rounded border-slate-300 text-slate-900 focus:ring-slate-900"
-              />
-              <span>Demand Itemized Ledger & RVUs</span>
-            </label>
-
-            <label className="flex items-center space-x-1.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={includeRegulatoryEscalation}
-                onChange={(e) => {
-                  setIncludeRegulatoryEscalation(e.target.checked);
-                  setIsDraftManuallyEdited(false);
-                }}
-                className="rounded border-slate-300 text-slate-900 focus:ring-slate-900"
-              />
-              <span>CFPB & CMS Regulatory Escalation</span>
-            </label>
+            <div className="flex items-center gap-1 text-[10px] text-slate-500">
+              <Building className="w-3 h-3 text-slate-400" />
+              <span>Escalation: {compiledLetter.escalationAgencies[0]}</span>
+            </div>
           </div>
 
           {/* Live Editable Textarea Body */}
           <div className="p-4 flex-1 flex flex-col space-y-3">
             <div className="relative flex-1">
               <textarea
-                value={customLetterDraft || generatedDraft}
+                value={customLetterDraft || compiledLetter.fullLetterMarkdown}
                 onChange={(e) => {
                   setCustomLetterDraft(e.target.value);
                   setIsDraftManuallyEdited(true);
                 }}
                 aria-label="Live editable legal demand draft"
-                className="w-full h-full min-h-[520px] p-4 text-xs font-mono text-slate-900 bg-slate-50/40 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 leading-relaxed resize-none transition-all"
+                className="w-full h-full min-h-[500px] p-4 text-xs font-mono text-slate-900 bg-slate-50/40 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 leading-relaxed resize-none transition-all"
                 placeholder="Dispute letter draft content..."
               />
             </div>
@@ -804,19 +879,21 @@ Authorized Consumer Representative & Advocate
             <div className="flex flex-wrap items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100 gap-2">
               <div className="flex items-center space-x-2">
                 <span className="font-semibold text-slate-700">
-                  {selectedChargeIds.length} of {currentCharges.length} Discrepancies Selected
+                  {selectedChargeIds.length} of {currentCharges.length} Charges Disputed ($
+                  {activeDisputedChargesTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })})
                 </span>
                 <span>•</span>
-                <span>{(customLetterDraft || generatedDraft).length} characters</span>
+                <span>{(customLetterDraft || compiledLetter.fullLetterMarkdown).length} characters</span>
+                {isSavingToDb && <span className="text-slate-400 italic">Syncing DB...</span>}
               </div>
 
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-3">
                 <button
                   type="button"
                   onClick={handleExportPDF}
                   className="text-xs font-semibold text-slate-900 hover:text-slate-700 flex items-center gap-1 underline underline-offset-2"
                 >
-                  <Printer className="w-3.5 h-3.5" aria-hidden="true" /> Print / Save as PDF
+                  <Printer className="w-3.5 h-3.5" aria-hidden="true" /> Print / Save PDF
                 </button>
               </div>
             </div>

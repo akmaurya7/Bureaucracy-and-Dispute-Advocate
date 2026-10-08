@@ -1,12 +1,12 @@
 import { prisma } from './prisma';
 import type {
-  DisputeCategory,
-  DisputeStatus,
   UserCase,
   Document,
   AuditLineItem,
   DisputeLetter,
   TimelineEvent,
+  DisputeCategory,
+  DisputeStatus,
   Prisma,
 } from '@prisma/client';
 
@@ -25,12 +25,13 @@ export interface CreateCaseDTO {
   opponentName: string;
   opponentAddress?: string | null;
   accountNumber?: string | null;
-  disputedAmount?: number;
+  disputedAmount?: number | null;
   currency?: string;
   statutoryDays?: number;
+  tags?: string[];
 }
 
-export interface CreateDocumentDTO {
+export interface AddDocumentDTO {
   caseId: string;
   fileName: string;
   fileType: string;
@@ -40,7 +41,7 @@ export interface CreateDocumentDTO {
   parsedJson?: string | null;
 }
 
-export interface CreateLineItemDTO {
+export interface LineItemDTO {
   description: string;
   billedAmount: number;
   fairAmount?: number | null;
@@ -65,32 +66,26 @@ export interface CreateTimelineEventDTO {
 }
 
 /**
- * Repository pattern implementation for UserCase and related dispute entities.
- * Decouples presentation and business logic from Prisma ORM for maximum testability and scalability.
+ * CaseRepository: High-level database abstraction isolating Prisma operations.
  */
 export class CaseRepository {
   /**
-   * Creates a new consumer dispute case.
+   * Creates a new UserCase along with an initial lifecycle timeline event.
    */
   static async createCase(dto: CreateCaseDTO): Promise<UserCase> {
-    const days = dto.statutoryDays ?? 30;
-    const deadline = new Date();
-    deadline.setDate(deadline.getDate() + days);
-
     return await prisma.userCase.create({
       data: {
         title: dto.title,
         category: dto.category,
         opponentName: dto.opponentName,
-        opponentAddress: dto.opponentAddress,
-        accountNumber: dto.accountNumber,
+        opponentAddress: dto.opponentAddress ?? null,
+        accountNumber: dto.accountNumber ?? null,
         disputedAmount: dto.disputedAmount ?? 0.0,
         currency: dto.currency ?? 'USD',
-        statutoryDays: days,
-        deadlineDate: deadline,
+        statutoryDays: dto.statutoryDays ?? 30,
         timelineEvents: {
           create: {
-            title: 'Case Initiated',
+            title: 'Case Initialized',
             description: `Dispute record created for ${dto.opponentName} under category ${dto.category}.`,
             eventType: 'CASE_CREATED',
           },
@@ -108,9 +103,7 @@ export class CaseRepository {
       include: {
         documents: true,
         lineItems: true,
-        disputeLetters: {
-          orderBy: { createdAt: 'desc' },
-        },
+        disputeLetters: true,
         timelineEvents: {
           orderBy: { timestamp: 'desc' },
         },
@@ -119,14 +112,10 @@ export class CaseRepository {
   }
 
   /**
-   * Lists all cases ordered by recent activity.
+   * Lists all cases with basic relation counts.
    */
-  static async listCases(filter?: { category?: DisputeCategory; status?: DisputeStatus }): Promise<UserCase[]> {
+  static async listCases(): Promise<UserCase[]> {
     return await prisma.userCase.findMany({
-      where: {
-        ...(filter?.category ? { category: filter.category } : {}),
-        ...(filter?.status ? { status: filter.status } : {}),
-      },
       orderBy: { updatedAt: 'desc' },
     });
   }
@@ -134,7 +123,11 @@ export class CaseRepository {
   /**
    * Updates case lifecycle status and automatically logs a timeline event.
    */
-  static async updateCaseStatus(id: string, status: DisputeStatus, notes?: string): Promise<UserCase> {
+  static async updateCaseStatus(
+    id: string,
+    status: DisputeStatus,
+    reason?: string
+  ): Promise<UserCase> {
     return await prisma.userCase.update({
       where: { id },
       data: {
@@ -142,8 +135,8 @@ export class CaseRepository {
         timelineEvents: {
           create: {
             title: `Status Changed to ${status}`,
-            description: notes ?? `Case status transitioned to ${status}.`,
-            eventType: 'STATUS_CHANGE',
+            description: reason || `Case status shifted to ${status}.`,
+            eventType: 'STATUS_UPDATE',
           },
         },
       },
@@ -151,9 +144,9 @@ export class CaseRepository {
   }
 
   /**
-   * Attaches an uploaded or scanned document to a case.
+   * Associates an uploaded or OCR-processed document with an existing case.
    */
-  static async addDocument(dto: CreateDocumentDTO): Promise<Document> {
+  static async addDocument(dto: AddDocumentDTO): Promise<Document> {
     const doc = await prisma.document.create({
       data: {
         caseId: dto.caseId,
@@ -161,17 +154,17 @@ export class CaseRepository {
         fileType: dto.fileType,
         fileSize: dto.fileSize,
         filePath: dto.filePath,
-        ocrRawText: dto.ocrRawText,
-        parsedJson: dto.parsedJson,
+        ocrRawText: dto.ocrRawText ?? null,
+        parsedJson: dto.parsedJson ?? null,
       },
     });
 
     await prisma.timelineEvent.create({
       data: {
         caseId: dto.caseId,
-        title: 'Document Uploaded',
-        description: `Attached ${dto.fileName} (${(dto.fileSize / 1024).toFixed(1)} KB)`,
-        eventType: 'DOCUMENT_UPLOADED',
+        title: 'Evidence Document Ingested',
+        description: `Attached ${dto.fileName} (${(dto.fileSize / 1024).toFixed(1)} KB).`,
+        eventType: 'DOCUMENT_ATTACHED',
       },
     });
 
@@ -179,47 +172,53 @@ export class CaseRepository {
   }
 
   /**
-   * Replaces or appends line items extracted during the statutory audit.
+   * Atomically overwrites or sets line items for an audited case.
    */
-  static async setLineItems(caseId: string, items: CreateLineItemDTO[]): Promise<AuditLineItem[]> {
-    // Delete existing line items for clean audit rerun
-    await prisma.auditLineItem.deleteMany({
-      where: { caseId },
-    });
-
-    await prisma.auditLineItem.createMany({
-      data: items.map((item) => ({
-        caseId,
-        description: item.description,
-        billedAmount: item.billedAmount,
-        fairAmount: item.fairAmount,
-        isFlagged: item.isFlagged ?? false,
-        flagReason: item.flagReason,
-        statuteRef: item.statuteRef,
-      })),
-    });
-
-    // Update case disputedAmount with sum of flagged items
-    const totalDisputed = items
-      .filter((i) => i.isFlagged)
-      .reduce((sum, item) => sum + item.billedAmount, 0);
-
-    if (totalDisputed > 0) {
-      await prisma.userCase.update({
-        where: { id: caseId },
-        data: { disputedAmount: totalDisputed },
+  static async setLineItems(
+    caseId: string,
+    items: LineItemDTO[]
+  ): Promise<AuditLineItem[]> {
+    return await prisma.$transaction(async (tx) => {
+      await tx.auditLineItem.deleteMany({
+        where: { caseId },
       });
-    }
 
-    return await prisma.auditLineItem.findMany({
-      where: { caseId },
+      const created: AuditLineItem[] = [];
+      for (const item of items) {
+        const line = await tx.auditLineItem.create({
+          data: {
+            caseId,
+            description: item.description,
+            billedAmount: item.billedAmount,
+            fairAmount: item.fairAmount ?? null,
+            isFlagged: item.isFlagged ?? false,
+            flagReason: item.flagReason ?? null,
+            statuteRef: item.statuteRef ?? null,
+          },
+        });
+        created.push(line);
+      }
+
+      await tx.timelineEvent.create({
+        data: {
+          caseId,
+          title: 'Line Items Audited',
+          description: `Updated ${items.length} itemized line charges (${items.filter(i => i.isFlagged).length} flagged).`,
+          eventType: 'LINE_ITEMS_UPDATED',
+        },
+      });
+
+      return created;
     });
   }
 
   /**
-   * Adds a newly generated legal dispute letter draft.
+   * Persists a newly generated formal dispute demand letter.
    */
-  static async addDisputeLetter(caseId: string, dto: CreateDisputeLetterDTO): Promise<DisputeLetter> {
+  static async addDisputeLetter(
+    caseId: string,
+    dto: CreateDisputeLetterDTO
+  ): Promise<DisputeLetter> {
     const letterCount = await prisma.disputeLetter.count({ where: { caseId } });
 
     const letter = await prisma.disputeLetter.create({
@@ -231,7 +230,7 @@ export class CaseRepository {
         subjectLine: dto.subjectLine,
         bodyMarkdown: dto.bodyMarkdown,
         legalCitations: dto.legalCitations,
-        pdfExportPath: dto.pdfExportPath,
+        pdfExportPath: dto.pdfExportPath ?? null,
       },
     });
 
@@ -250,6 +249,13 @@ export class CaseRepository {
     });
 
     return letter;
+  }
+
+  /**
+   * Alias for addDisputeLetter.
+   */
+  static async createDisputeLetter(caseId: string, dto: CreateDisputeLetterDTO): Promise<DisputeLetter> {
+    return this.addDisputeLetter(caseId, dto);
   }
 
   /**
