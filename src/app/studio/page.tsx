@@ -25,6 +25,10 @@ import {
   Database,
   Calendar,
   Building,
+  Eye,
+  Edit3,
+  Barcode,
+  Gavel,
 } from 'lucide-react';
 import DocumentDropzone, { SAMPLE_DOCUMENTS } from '@/components/DocumentDropzone';
 import StatutoryClauseToggles, {
@@ -84,6 +88,9 @@ export default function DisputeStudioPage() {
   const [rawSourceText, setRawSourceText] = useState(defaultSample.rawText);
   const [isPIIRedacted, setIsPIIRedacted] = useState(true);
   const [activeLeftView, setActiveLeftView] = useState<'itemized' | 'raw'>('itemized');
+
+  // Right pane view mode: 'preview' (Court-Ready Document with highlights) vs 'editor' (Raw Markdown)
+  const [rightViewMode, setRightViewMode] = useState<'preview' | 'editor'>('preview');
 
   // Parsed Document State
   const [parsedDoc, setParsedDoc] = useState<ParsedDocumentData>({
@@ -206,14 +213,14 @@ export default function DisputeStudioPage() {
     'charge-4',
   ]);
 
-  // Active highlighted line item ID (for bidirectional synchronization)
+  // Synchronized Highlighting State across left and right panes
   const [highlightedChargeId, setHighlightedChargeId] = useState<string | null>(null);
 
   // Live Editable Legal Draft State
   const [customLetterDraft, setCustomLetterDraft] = useState<string>('');
   const [isDraftManuallyEdited, setIsDraftManuallyEdited] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [pdfGenerating, setPdfGenerating] = useState(false);
+  const [copiedText, setCopiedText] = useState(false);
+  const [pdfDownloading, setPdfDownloading] = useState(false);
 
   // Database Persistence State
   const [savedCaseId, setSavedCaseId] = useState<string | null>(null);
@@ -237,7 +244,7 @@ export default function DisputeStudioPage() {
     });
   }, [parsedDoc, selectedDomain, directives, selectedChargeIds]);
 
-  // Sync draft state with compiled letter unless user customized it
+  // Sync draft state with compiled letter unless user manually customized it
   useEffect(() => {
     if (!isDraftManuallyEdited) {
       setCustomLetterDraft(compiledLetter.fullLetterMarkdown);
@@ -343,57 +350,67 @@ export default function DisputeStudioPage() {
     setIsDraftManuallyEdited(false);
   };
 
-  const handleCopy = async () => {
+  // 1-Click "Download Court-Ready PDF" trigger via POST /api/disputes/pdf
+  const handleDownloadCourtReadyPdf = async () => {
     try {
-      await navigator.clipboard.writeText(customLetterDraft || compiledLetter.fullLetterMarkdown);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setPdfDownloading(true);
+      const res = await fetch('/api/disputes/pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          caseId: savedCaseId || undefined,
+          letter: compiledLetter,
+          customDraftMarkdown: isDraftManuallyEdited ? customLetterDraft : undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`PDF generation endpoint returned status ${res.status}`);
+      }
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const safeRecipient = (compiledLetter.recipientName || 'Dispute_Demand').replace(/[^a-zA-Z0-9_-]/g, '_');
+      link.download = `Court_Ready_Dispute_${safeRecipient}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.warn('PDF endpoint download failed, triggering native print dialog fallback:', err);
+      window.print();
+    } finally {
+      setPdfDownloading(false);
     }
   };
 
-  const handleExportPDF = () => {
-    setPdfGenerating(true);
-    setTimeout(() => {
-      setPdfGenerating(false);
-      const printWindow = window.open('', '_blank');
-      if (printWindow) {
-        printWindow.document.write(`
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <title>Legal Demand Letter - ${parsedDoc.senderOrCreditor.accountOrReferenceNumber || 'Dispute'}</title>
-              <style>
-                body {
-                  font-family: 'Times New Roman', serif;
-                  font-size: 12pt;
-                  line-height: 1.6;
-                  color: #000;
-                  margin: 1.5in 1in 1in 1in;
-                  background: #fff;
-                }
-                pre {
-                  white-space: pre-wrap;
-                  font-family: 'Times New Roman', serif;
-                  font-size: 11pt;
-                }
-                @page {
-                  margin: 1in;
-                }
-              </style>
-            </head>
-            <body>
-              <pre>${customLetterDraft || compiledLetter.fullLetterMarkdown}</pre>
-            </body>
-          </html>
-        `);
-        printWindow.document.close();
-        printWindow.focus();
-        printWindow.print();
-      }
-    }, 600);
+  // "Copy Certified Text" with clean plain-text formatting and instant visual indicator
+  const handleCopyCertifiedText = async () => {
+    try {
+      const rawText = customLetterDraft || compiledLetter.fullLetterMarkdown;
+      // Strip markdown markers while preserving formal structure and indentation
+      const cleanPlainText = rawText
+        .replace(/^###\s*(.*)$/gm, '\n$1\n' + '—'.repeat(40))
+        .replace(/^##\s*(.*)$/gm, '\n\n$1\n' + '='.repeat(50))
+        .replace(/^#\s*(.*)$/gm, '\n\n$1\n' + '='.repeat(60))
+        .replace(/\*\*(.*?)\*\*/g, '$1')
+        .replace(/\*(.*?)\*/g, '$1')
+        .replace(/`([^`]+)`/g, '$1')
+        .trim();
+
+      await navigator.clipboard.writeText(cleanPlainText);
+      setCopiedText(true);
+      setTimeout(() => setCopiedText(false), 2200);
+    } catch (err) {
+      console.error('Failed to copy to clipboard:', err);
+    }
+  };
+
+  // Native Browser Print optimized for 0.75-inch legal margins
+  const handleNativePrint = () => {
+    window.print();
   };
 
   const currentCharges = parsedDoc.debtOrBillDetails.itemizedCharges || [];
@@ -412,7 +429,7 @@ export default function DisputeStudioPage() {
   return (
     <div className="space-y-6">
       {/* Studio Header & Global Actions */}
-      <header className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+      <header className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm no-print">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-2.5">
@@ -433,7 +450,7 @@ export default function DisputeStudioPage() {
             </div>
             <p className="text-xs text-slate-600">
               Annotated source document (Left) synchronized with live statutory demand letter (Right).
-              Switch engines or toggle directives to adjust statutory demands in real time.
+              Hover over items to cross-inspect evidence and statutory directives.
             </p>
           </div>
 
@@ -490,35 +507,35 @@ export default function DisputeStudioPage() {
               <span>{isPIIRedacted ? 'PII Masking ON' : 'PII Masking OFF'}</span>
             </button>
 
-            {/* Copy Draft Button */}
+            {/* Copy Certified Text Action Button */}
             <button
               type="button"
-              onClick={handleCopy}
+              onClick={handleCopyCertifiedText}
               className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-medium transition-colors shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
-              aria-label="Copy legal demand letter draft to clipboard"
+              aria-label="Copy clean certified plain text to clipboard"
             >
-              {copied ? (
+              {copiedText ? (
                 <Check className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" />
               ) : (
                 <Copy className="w-3.5 h-3.5 text-slate-600" aria-hidden="true" />
               )}
-              <span>{copied ? 'Copied' : 'Copy'}</span>
+              <span>{copiedText ? 'Copied Certified Text!' : 'Copy Certified Text'}</span>
             </button>
 
-            {/* 1-Click PDF Export Button */}
+            {/* 1-Click Download Court-Ready PDF Button */}
             <button
               type="button"
-              onClick={handleExportPDF}
-              disabled={pdfGenerating}
+              onClick={handleDownloadCourtReadyPdf}
+              disabled={pdfDownloading}
               className="inline-flex items-center space-x-1.5 px-4 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium transition-colors shadow-sm disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
-              aria-label="Export certified court-ready PDF letter"
+              aria-label="Download court-ready Certified Mail PDF letter"
             >
-              {pdfGenerating ? (
+              {pdfDownloading ? (
                 <Clock className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
               ) : (
                 <Download className="w-3.5 h-3.5" aria-hidden="true" />
               )}
-              <span>{pdfGenerating ? 'Generating...' : 'Export Certified PDF'}</span>
+              <span>{pdfDownloading ? 'Generating PDF...' : 'Download Court-Ready PDF'}</span>
             </button>
           </div>
         </div>
@@ -526,14 +543,14 @@ export default function DisputeStudioPage() {
 
       {/* Collapsible Document Dropzone Component Integration */}
       {showDropzone && (
-        <div className="transition-all duration-300">
+        <div className="transition-all duration-300 no-print">
           <DocumentDropzone onDocumentParsed={handleDocumentParsed} />
         </div>
       )}
 
       {/* Collapsible Statutory Clause Toggles & Engine Switcher */}
       {showDirectivesPanel && (
-        <div className="transition-all duration-300">
+        <div className="transition-all duration-300 no-print">
           <StatutoryClauseToggles
             selectedDomain={selectedDomain}
             onDomainChange={handleDomainChange}
@@ -551,7 +568,7 @@ export default function DisputeStudioPage() {
         {/* ================= LEFT PANE: Ingested Document & Itemized Audit ================= */}
         <section
           aria-label="Annotated Source Document and Line-Item Audit"
-          className="bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden"
+          className="bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden no-print"
         >
           {/* Left Pane Top Bar */}
           <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex flex-wrap items-center justify-between gap-2">
@@ -640,14 +657,14 @@ export default function DisputeStudioPage() {
                   </div>
                 </div>
 
-                {/* Parsed Line Items List with Synchronization Checkboxes */}
+                {/* Parsed Line Items List with Bidirectional Synchronized Highlighting */}
                 <div className="space-y-2.5">
                   <div className="flex items-center justify-between">
                     <h2 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                       Extracted Line Items ({currentCharges.length}):
                     </h2>
                     <span className="text-[11px] text-slate-500">
-                      Check items to include in formal legal demand letter
+                      Hover to highlight in demand letter • Check to dispute
                     </span>
                   </div>
 
@@ -661,12 +678,12 @@ export default function DisputeStudioPage() {
                         key={item.id || `charge-${index}`}
                         onMouseEnter={() => setHighlightedChargeId(item.id || null)}
                         onMouseLeave={() => setHighlightedChargeId(null)}
-                        className={`p-3 rounded-lg border transition-all ${
+                        className={`p-3 rounded-lg border transition-all duration-150 relative ${
                           isHovered
-                            ? 'border-slate-800 bg-slate-50 shadow-sm'
+                            ? 'border-amber-500 bg-amber-50/80 shadow-md ring-2 ring-amber-400'
                             : isFlagged
-                            ? 'border-rose-200 bg-rose-50/40'
-                            : 'border-slate-200 bg-white hover:bg-slate-50/60'
+                            ? 'border-rose-200 bg-rose-50/40 hover:bg-rose-50/70'
+                            : 'border-slate-200 bg-white hover:bg-slate-50/80'
                         }`}
                       >
                         <div className="flex items-start justify-between gap-3">
@@ -692,6 +709,11 @@ export default function DisputeStudioPage() {
                                 >
                                   {item.description}
                                 </label>
+                                {isHovered && (
+                                  <span className="bg-amber-200 text-amber-900 text-[9px] font-bold px-1.5 py-0.2 rounded-full uppercase tracking-wider animate-pulse">
+                                    Synchronized
+                                  </span>
+                                )}
                               </div>
 
                               {/* Flag Reason & Statutory Basis */}
@@ -773,24 +795,71 @@ export default function DisputeStudioPage() {
           </div>
         </section>
 
-        {/* ================= RIGHT PANE: Live-Editable Legal Demand Letter ================= */}
+        {/* ================= RIGHT PANE: Live Legal Demand Letter & Court Preview ================= */}
         <section
           aria-label="Formal Legal Demand Letter Live Editor"
           className="bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden"
         >
           {/* Right Pane Top Bar */}
-          <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex flex-wrap items-center justify-between gap-2 no-print">
             <div className="flex items-center space-x-2">
               <Scale className="w-4 h-4 text-slate-800" aria-hidden="true" />
               <h2 className="text-xs font-bold text-slate-900">
-                Formal Legal Demand Letter (Live Editor)
+                Formal Legal Demand Letter
               </h2>
+
+              {/* View Mode Switcher: Formatted Court Preview vs Raw Markdown Editor */}
+              <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 text-xs ml-2">
+                <button
+                  type="button"
+                  onClick={() => setRightViewMode('preview')}
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1 ${
+                    rightViewMode === 'preview'
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  aria-pressed={rightViewMode === 'preview'}
+                >
+                  <Eye className="w-3 h-3" /> Court Preview
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRightViewMode('editor')}
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1 ${
+                    rightViewMode === 'editor'
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  aria-pressed={rightViewMode === 'editor'}
+                >
+                  <Edit3 className="w-3 h-3" /> Raw Editor
+                </button>
+              </div>
             </div>
+
             <div className="flex items-center space-x-2">
+              {/* Statutory Deadline Chip */}
               <span className="text-xs font-mono bg-white border border-amber-200 px-2 py-0.5 rounded text-amber-900 font-semibold flex items-center gap-1">
                 <Clock className="w-3 h-3 text-amber-600" aria-hidden="true" />
-                Deadline: {compiledLetter.statutoryDeadlineDate}
+                Due: {compiledLetter.statutoryDeadlineDate}
               </span>
+
+              {/* Right-Pane Header 1-Click PDF Button */}
+              <button
+                type="button"
+                onClick={handleDownloadCourtReadyPdf}
+                disabled={pdfDownloading}
+                className="inline-flex items-center space-x-1 px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 shadow-2xs"
+                title="Download certified PDF with 0.75-inch margins"
+              >
+                {pdfDownloading ? (
+                  <Clock className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Download className="w-3 h-3" />
+                )}
+                <span>Court PDF</span>
+              </button>
+
               {isDraftManuallyEdited && (
                 <button
                   type="button"
@@ -798,17 +867,17 @@ export default function DisputeStudioPage() {
                     setIsDraftManuallyEdited(false);
                     setCustomLetterDraft(compiledLetter.fullLetterMarkdown);
                   }}
-                  className="text-xs text-slate-600 hover:text-slate-900 flex items-center gap-1 underline underline-offset-2"
+                  className="text-xs text-slate-600 hover:text-slate-900 flex items-center gap-1 underline underline-offset-2 ml-1"
                   aria-label="Reset draft to auto-synchronized state"
                 >
-                  <RotateCcw className="w-3 h-3" /> Reset Auto-Draft
+                  <RotateCcw className="w-3 h-3" /> Reset
                 </button>
               )}
             </div>
           </div>
 
           {/* Legal Citations & Statutory Grounds Bar */}
-          <div className="bg-slate-50/70 border-b border-slate-200 px-4 py-2.5 flex flex-wrap items-center gap-1.5 text-xs">
+          <div className="bg-slate-50/70 border-b border-slate-200 px-4 py-2 flex flex-wrap items-center gap-1.5 text-xs no-print">
             <span className="font-bold text-slate-700 mr-1 text-[11px] uppercase tracking-wide">
               Codified Citations:
             </span>
@@ -824,31 +893,31 @@ export default function DisputeStudioPage() {
           </div>
 
           {/* Active Directives Status Strip */}
-          <div className="bg-white border-b border-slate-100 px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-semibold text-slate-700">Active Directives:</span>
+          <div className="bg-white border-b border-slate-100 px-4 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 no-print">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="font-semibold text-slate-700">Enforced Directives:</span>
               {directives.ceasePhoneCalls && (
-                <span className="bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded font-medium">
+                <span className="bg-slate-100 text-slate-800 px-1.5 py-0.2 rounded font-medium">
                   Writing-Only
                 </span>
               )}
               {directives.demandItemizedLedger && (
-                <span className="bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded font-medium">
+                <span className="bg-slate-100 text-slate-800 px-1.5 py-0.2 rounded font-medium">
                   Itemized Ledger
                 </span>
               )}
               {directives.requestChainOfTitle && (
-                <span className="bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded font-medium">
+                <span className="bg-slate-100 text-slate-800 px-1.5 py-0.2 rounded font-medium">
                   Chain-of-Title
                 </span>
               )}
               {directives.includeMethodOfVerification && (
-                <span className="bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded font-medium">
+                <span className="bg-slate-100 text-slate-800 px-1.5 py-0.2 rounded font-medium">
                   MOV Demand
                 </span>
               )}
               {directives.includeRegulatoryEscalation && (
-                <span className="bg-rose-50 text-rose-800 border border-rose-200 px-1.5 py-0.5 rounded font-medium">
+                <span className="bg-rose-50 text-rose-800 border border-rose-200 px-1.5 py-0.2 rounded font-medium">
                   Escalation Warning
                 </span>
               )}
@@ -860,23 +929,244 @@ export default function DisputeStudioPage() {
             </div>
           </div>
 
-          {/* Live Editable Textarea Body */}
-          <div className="p-4 flex-1 flex flex-col space-y-3">
-            <div className="relative flex-1">
-              <textarea
-                value={customLetterDraft || compiledLetter.fullLetterMarkdown}
-                onChange={(e) => {
-                  setCustomLetterDraft(e.target.value);
-                  setIsDraftManuallyEdited(true);
-                }}
-                aria-label="Live editable legal demand draft"
-                className="w-full h-full min-h-[500px] p-4 text-xs font-mono text-slate-900 bg-slate-50/40 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 leading-relaxed resize-none transition-all"
-                placeholder="Dispute letter draft content..."
-              />
+          {/* Content Body: Dual Mode (Interactive Court Preview OR Raw Textarea Editor) */}
+          <div className="p-4 flex-1 flex flex-col space-y-3 overflow-y-auto max-h-[750px]">
+            {rightViewMode === 'preview' ? (
+              /* ================= COURT PREVIEW (INTERACTIVE SYNCHRONIZED HIGHLIGHTING) ================= */
+              <div className="space-y-4 font-serif text-slate-900 text-xs sm:text-sm leading-relaxed p-4 bg-slate-50/50 border border-slate-200 rounded-lg">
+                {/* USPS Certified Mail Tracking Header Card */}
+                <div className="bg-white border-2 border-slate-300 p-3.5 rounded-lg space-y-1.5 font-sans">
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-900 border-b border-slate-200 pb-1.5">
+                    <span className="tracking-wider">USPS CERTIFIED MAIL™ • RETURN RECEIPT REQUESTED</span>
+                    <span className="bg-slate-900 text-white text-[10px] font-mono px-2 py-0.5 rounded">
+                      FORMAL LEGAL SERVICE
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs font-mono pt-0.5">
+                    <span className="font-bold text-slate-800">
+                      ARTICLE NO: {compiledLetter.trackingNumber}
+                    </span>
+                    <span className="text-slate-500 text-[11px]">
+                      SLA: {compiledLetter.statutorySlaDays}{' '}
+                      {compiledLetter.governingStatute.timeUnit === 'business_days' ? 'Business' : 'Calendar'} Days
+                    </span>
+                  </div>
+                  <div className="text-[9px] font-mono text-slate-400 tracking-widest pt-0.5">
+                    |||| | ||||| |||| || | |||| ||||| |||| || | |||| ||||| || ||||| ||
+                  </div>
+                </div>
+
+                {/* Formal Caption Block */}
+                <div className="space-y-2 border-b border-slate-200 pb-3 font-sans text-xs">
+                  <div>
+                    <span className="text-slate-500 font-semibold block uppercase text-[10px]">Date of Dispatch:</span>
+                    <span className="font-semibold text-slate-900">
+                      {new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div className="bg-white p-2.5 rounded border border-slate-200">
+                      <span className="text-slate-500 font-bold block uppercase text-[10px]">From (Debtor / Consumer):</span>
+                      <span className="font-semibold text-slate-900 block">{parsedDoc.consumerOrDebtor?.name || 'Consumer Account Holder'}</span>
+                      <span className="text-slate-600 text-[11px] block">{parsedDoc.consumerOrDebtor?.address || '123 Consumer Protection Way, Austin, TX 78701'}</span>
+                    </div>
+
+                    <div className="bg-white p-2.5 rounded border border-slate-200">
+                      <span className="text-slate-500 font-bold block uppercase text-[10px]">To (Creditor / Collector / Billing):</span>
+                      <span className="font-bold text-slate-900 block">{compiledLetter.recipientName}</span>
+                      <span className="text-slate-600 text-[11px] block">{compiledLetter.recipientAddress}</span>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-100 p-2.5 rounded border border-slate-200 mt-2 font-mono text-xs">
+                    <span className="font-bold text-slate-900 block">{compiledLetter.subjectLine}</span>
+                    <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-slate-600">
+                      <span>Total Disputed: <strong>${compiledLetter.totalDisputedAmount.toFixed(2)}</strong></span>
+                      <span>•</span>
+                      <span>Governing Law: <strong>{compiledLetter.governingStatute.code}</strong></span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Formal Letter Introduction */}
+                <p>
+                  Dear Compliance Officers and Claims Representatives,
+                </p>
+                <p>
+                  Please take formal notice that the consumer disputes in whole the claimed balance, billing assertions,
+                  and derogatory fees associated with Reference Number{' '}
+                  <strong className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200">
+                    {parsedDoc.senderOrCreditor.accountOrReferenceNumber || '847291048'}
+                  </strong>
+                  . Pursuant to codified protections under {compiledLetter.governingStatute.code}, this notice establishes
+                  our formal evidentiary objections and demands for statutory remediation.
+                </p>
+
+                {/* Synchronized Disputed Line-Item Paragraphs */}
+                {activeDisputedCharges.length > 0 && (
+                  <div className="space-y-2 border-y border-slate-200 py-3 my-3">
+                    <h3 className="font-sans text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center justify-between">
+                      <span>Itemized Discrepancies & Statutory Violations:</span>
+                      <span className="text-[10px] text-slate-500 lowercase font-normal">
+                        (hovering links to left-pane evidence)
+                      </span>
+                    </h3>
+
+                    <div className="space-y-2">
+                      {activeDisputedCharges.map((charge, idx) => {
+                        const isHovered = highlightedChargeId === charge.id;
+                        return (
+                          <div
+                            key={charge.id || idx}
+                            onMouseEnter={() => charge.id && setHighlightedChargeId(charge.id)}
+                            onMouseLeave={() => setHighlightedChargeId(null)}
+                            className={`p-2.5 rounded transition-all duration-150 cursor-pointer ${
+                              isHovered
+                                ? 'bg-amber-100/90 border-l-4 border-amber-600 shadow-sm ring-1 ring-amber-300 pl-3'
+                                : 'bg-white border border-slate-200 hover:bg-slate-100/60'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-bold text-slate-900 font-sans text-xs">
+                                    {idx + 1}. {charge.code ? `[${charge.code}] ` : ''}{charge.description}
+                                  </span>
+                                  {isHovered && (
+                                    <span className="bg-amber-600 text-white text-[9px] font-sans font-bold px-1.5 py-0.2 rounded uppercase">
+                                      Active Evidence Focus
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-700 italic">
+                                  Violation: {charge.violationExplanation || charge.flagReason || 'Unverified billing charge requiring formal substantiation.'}
+                                </p>
+                                {(charge.statutoryBasis || charge.statuteRef) && (
+                                  <span className="inline-block text-[10px] font-mono text-sky-800 bg-sky-50 border border-sky-200 px-1 py-0.2 rounded font-sans">
+                                    Statutory Basis: {charge.statutoryBasis || charge.statuteRef}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="font-sans font-bold text-slate-900 text-xs flex-shrink-0">
+                                ${(charge.amount || charge.billedAmount || 0).toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Mandatory Accounting & Evidentiary Demands Section */}
+                {directives.demandItemizedLedger && (
+                  <div className="space-y-1.5 bg-white p-3 rounded border border-slate-200">
+                    <h4 className="font-sans text-xs font-bold text-slate-900 uppercase">
+                      Mandatory Accounting & Procedural Ledger Demand:
+                    </h4>
+                    <p className="text-[11px] text-slate-700">
+                      Pursuant to codified statutory disclosure mandates, you are formally directed to furnish a complete,
+                      unredacted line-by-line accounting ledger calculated from $0 original balance, detailing procedural codes (CPT/REV),
+                      contracted in-network allowances, and Relative Value Units (RVUs).
+                    </p>
+                  </div>
+                )}
+
+                {/* Telephone Cease-and-Desist Directive */}
+                {directives.ceasePhoneCalls && (
+                  <div className="space-y-1.5 bg-white p-3 rounded border border-slate-200">
+                    <h4 className="font-sans text-xs font-bold text-slate-900 uppercase">
+                      Formal Telephone Cease-and-Desist Directive (15 U.S.C. § 1692c(c)):
+                    </h4>
+                    <p className="text-[11px] text-slate-700">
+                      All telephone contact, automated dialers, and SMS messaging to consumer residence or place of employment
+                      are strictly prohibited as inconvenient. All future communication regarding this matter must occur exclusively in writing via U.S. Mail.
+                    </p>
+                  </div>
+                )}
+
+                {/* Chain of Title Directive */}
+                {directives.requestChainOfTitle && (
+                  <div className="space-y-1.5 bg-white p-3 rounded border border-slate-200">
+                    <h4 className="font-sans text-xs font-bold text-slate-900 uppercase">
+                      Demand for Complete Chain-of-Title & Original Agreement:
+                    </h4>
+                    <p className="text-[11px] text-slate-700">
+                      You are required to submit certified documentation evidencing the unbroken assignment of legal title from the originating creditor
+                      along with a true and correct copy of the original signed contract establishing standing to collect.
+                    </p>
+                  </div>
+                )}
+
+                {/* Method of Verification (MOV) Demand */}
+                {directives.includeMethodOfVerification && (
+                  <div className="space-y-1.5 bg-white p-3 rounded border border-slate-200">
+                    <h4 className="font-sans text-xs font-bold text-slate-900 uppercase">
+                      Statutory Method of Verification (MOV) Demand (15 U.S.C. § 1681i(a)(7)):
+                    </h4>
+                    <p className="text-[11px] text-slate-700">
+                      Demand is hereby made that you provide a written description of the exact procedure used to verify disputed information,
+                      including the business name, address, and telephone number of each furnisher contacted.
+                    </p>
+                  </div>
+                )}
+
+                {/* Statutory Regulatory Escalation Warning */}
+                {directives.includeRegulatoryEscalation && (
+                  <div className="space-y-1.5 bg-rose-50/60 p-3 rounded border border-rose-200">
+                    <h4 className="font-sans text-xs font-bold text-rose-900 uppercase flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                      Notice of Pending Regulatory Escalation:
+                    </h4>
+                    <p className="text-[11px] text-rose-900">
+                      Failure to respond and rectify the disputed balance within {compiledLetter.statutorySlaDays} days
+                      (on or before <strong>{compiledLetter.statutoryDeadlineDate}</strong>) will result in immediate formal complaints
+                      submitted to the {compiledLetter.escalationAgencies.join(', ')} without further notice.
+                    </p>
+                  </div>
+                )}
+
+                {/* Perjury Attestation & Signature Line */}
+                <div className="pt-3 border-t border-slate-200 space-y-3 font-sans text-xs">
+                  <p className="text-[11px] text-slate-600 italic">
+                    I declare under penalty of perjury under the laws of the United States of America that the foregoing dispute notice
+                    and factual assertions are true and correct. All consumer rights are expressly reserved.
+                  </p>
+                  <div className="pt-4">
+                    <p className="text-slate-800">Respectfully submitted,</p>
+                    <div className="mt-6 border-b border-slate-400 w-64" />
+                    <span className="text-[10px] text-slate-500 block mt-1">
+                      Authorized Signature of Consumer / Legal Representative
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* ================= RAW MARKDOWN EDITOR ================= */
+              <div className="relative flex-1">
+                <textarea
+                  value={customLetterDraft || compiledLetter.fullLetterMarkdown}
+                  onChange={(e) => {
+                    setCustomLetterDraft(e.target.value);
+                    setIsDraftManuallyEdited(true);
+                  }}
+                  aria-label="Live editable legal demand draft"
+                  className="w-full h-full min-h-[520px] p-4 text-xs font-mono text-slate-900 bg-slate-50/40 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 leading-relaxed resize-none transition-all"
+                  placeholder="Dispute letter draft content..."
+                />
+              </div>
+            )}
+
+            {/* Hidden container dedicated strictly for native browser printing (@media print) */}
+            <div className="court-ready-print-container hidden print:block">
+              <pre className="court-ready-letter-text">
+                {customLetterDraft || compiledLetter.fullLetterMarkdown}
+              </pre>
             </div>
 
             {/* Letter Bottom Metadata Bar */}
-            <div className="flex flex-wrap items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100 gap-2">
+            <div className="flex flex-wrap items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100 gap-2 no-print">
               <div className="flex items-center space-x-2">
                 <span className="font-semibold text-slate-700">
                   {selectedChargeIds.length} of {currentCharges.length} Charges Disputed ($
@@ -890,10 +1180,11 @@ export default function DisputeStudioPage() {
               <div className="flex items-center space-x-3">
                 <button
                   type="button"
-                  onClick={handleExportPDF}
+                  onClick={handleNativePrint}
                   className="text-xs font-semibold text-slate-900 hover:text-slate-700 flex items-center gap-1 underline underline-offset-2"
+                  title="Print formal letter with 0.75-inch margins"
                 >
-                  <Printer className="w-3.5 h-3.5" aria-hidden="true" /> Print / Save PDF
+                  <Printer className="w-3.5 h-3.5" aria-hidden="true" /> Print / Native PDF
                 </button>
               </div>
             </div>

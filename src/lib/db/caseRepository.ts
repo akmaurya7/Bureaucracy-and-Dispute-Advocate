@@ -259,6 +259,32 @@ export class CaseRepository {
   }
 
   /**
+   * Retrieves a dispute letter by its unique ID, including the parent userCase.
+   */
+  static async getDisputeLetterById(id: string): Promise<(DisputeLetter & { userCase?: UserCase }) | null> {
+    return (await prisma.disputeLetter.findUnique({
+      where: { id },
+      include: {
+        userCase: true,
+      },
+    })) as any;
+  }
+
+  /**
+   * Adds an explicit timeline event to a case.
+   */
+  static async addTimelineEvent(caseId: string, dto: CreateTimelineEventDTO): Promise<TimelineEvent> {
+    return await prisma.timelineEvent.create({
+      data: {
+        caseId,
+        title: dto.title,
+        description: dto.description,
+        eventType: dto.eventType,
+      },
+    });
+  }
+
+  /**
    * Deletes a case and cascades all child documents, lines, and timeline events.
    */
   static async deleteCase(id: string): Promise<UserCase> {

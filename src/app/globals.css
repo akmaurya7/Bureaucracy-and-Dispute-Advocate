@@ -44,3 +44,69 @@ body {
 .badge-violation {
   @apply bg-rose-50 text-rose-700 border border-rose-200 text-xs px-2.5 py-0.5 rounded-full font-medium;
 }
+
+/* ========================================================================= */
+/* COURT-READY LEGAL PRINT STYLESHEET (@media print)                          */
+/* Ensures clean 0.75-inch margins, serif typography, and zero UI clutter.   */
+/* ========================================================================= */
+@media print {
+  @page {
+    size: letter portrait;
+    margin: 0.75in;
+  }
+
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-family: "Times New Roman", Times, Georgia, serif !important;
+    font-size: 11pt !important;
+    line-height: 1.5 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Hide entire application navigation, footers, dropzones, left panes, buttons */
+  nav,
+  footer,
+  header,
+  .no-print,
+  .print\\:hidden,
+  [aria-label="Annotated Source Document and Line-Item Audit"],
+  [aria-label="Statutory Dispute Engine & Clause Directives Control Panel"],
+  [aria-label="Upload evidence document"],
+  button,
+  input,
+  textarea {
+    display: none !important;
+  }
+
+  main {
+    max-width: 100% !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: block !important;
+  }
+
+  .court-ready-print-container {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+  }
+
+  .court-ready-letter-text {
+    display: block !important;
+    font-family: "Times New Roman", Times, Georgia, serif !important;
+    font-size: 11pt !important;
+    line-height: 1.55 !important;
+    color: #000000 !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+  }
+}
