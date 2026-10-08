@@ -1,0 +1,98 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum DisputeCategory {
+  MEDICAL_BILLING
+  DEBT_COLLECTION
+  CREDIT_REPORT_ERROR
+  SUBSCRIPTION_CANCEL
+  RENTAL_LEASE_DISPUTE
+  UTILITY_OVERCHARGE
+  AIRLINE_PASSENGER_RIGHTS
+}
+
+enum DisputeStatus {
+  DRAFT
+  AUDITED
+  LETTER_GENERATED
+  SENT
+  AWAITING_RESPONSE
+  RESOLVED_SETTLED
+  ESCALATED_REGULATOR
+}
+
+model UserCase {
+  id              String           @id @default(cuid())
+  title           String
+  category        DisputeCategory
+  status          DisputeStatus    @default(DRAFT)
+  opponentName    String
+  opponentAddress String?
+  accountNumber   String?
+  disputedAmount  Float            @default(0.0)
+  currency        String           @default("USD")
+  sentDate        DateTime?
+  statutoryDays   Int              @default(30)
+  deadlineDate    DateTime?
+  documents       Document[]
+  lineItems       AuditLineItem[]
+  disputeLetters  DisputeLetter[]
+  timelineEvents  TimelineEvent[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+}
+
+model Document {
+  id          String   @id @default(cuid())
+  caseId      String
+  fileName    String
+  fileType    String
+  fileSize    Int
+  filePath    String
+  ocrRawText  String?
+  parsedJson  String?
+  createdAt   DateTime @default(now())
+  userCase    UserCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
+model AuditLineItem {
+  id             String   @id @default(cuid())
+  caseId         String
+  description    String
+  billedAmount   Float
+  fairAmount     Float?
+  isFlagged      Boolean  @default(false)
+  flagReason     String?
+  statuteRef     String?
+  userCase       UserCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
+model DisputeLetter {
+  id             String   @id @default(cuid())
+  caseId         String
+  version        Int      @default(1)
+  recipientName  String
+  recipientAddr  String
+  subjectLine    String
+  bodyMarkdown   String
+  legalCitations String
+  pdfExportPath  String?
+  createdAt      DateTime @default(now())
+  userCase       UserCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
+model TimelineEvent {
+  id          String   @id @default(cuid())
+  caseId      String
+  title       String
+  description String
+  eventType   String
+  timestamp   DateTime @default(now())
+  userCase    UserCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}

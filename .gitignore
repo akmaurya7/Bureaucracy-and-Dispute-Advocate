@@ -1,0 +1,40 @@
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Production / Next.js Build
+/.next/
+/out/
+/build
+/dist
+
+# SQLite Databases (Sensitive runtime data)
+*.db
+*.db-journal
+prisma/*.db
+prisma/*.db-journal
+
+# Environment variables
+.env
+.env*.local
+!.env.example
+
+# Debug and Process Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# System and IDE Files
+.DS_Store
+*.pem
+Thumbs.db
+.vscode/
+.idea/
+
+# Agent local state & cache
+.agents/
+.gemini/
